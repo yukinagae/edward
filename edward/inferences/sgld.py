@@ -6,8 +6,7 @@ import six
 import tensorflow as tf
 
 from edward.inferences import docstrings as doc
-from edward.inferences.util import make_intercept
-from edward.models.core import Node, trace
+from edward.inferences.util import call_with_intercept, toposort
 
 
 @doc.set_doc(
@@ -81,6 +80,7 @@ def sgld(model,
   def model():
     mu = Normal(loc=0.0, scale=1.0, name="mu")
     x = Normal(loc=mu, scale=1.0, sample_shape=10, name="x")
+    return x
   ```
   In graph mode, build `tf.Variable`s which are updated via the Markov
   chain. The update op is fetched at runtime over many iterations.
@@ -123,16 +123,13 @@ def sgld(model,
   """
   def _target_log_prob_fn(*fargs):
     """Target's unnormalized log-joint density as a function of states."""
-    posterior_trace = {state.name.split(':')[0]: Node(arg)
-                       for state, arg in zip(states, fargs)}
-    intercept = make_intercept(
-        posterior_trace, align_data, align_latent, args, kwargs)
-    model_trace = trace(model, intercept=intercept, *args, **kwargs)
-
+    q_trace = {state.name.split(':')[0]: arg
+               for state, arg in zip(states, fargs)}
+    x = call_with_intercept(model, q_trace, align_data, align_latent,
+                            *args, **kwargs)
     p_log_prob = 0.0
-    for name, node in six.iteritems(model_trace):
-      if align_latent(name) is not None or align_data(name) is not None:
-        rv = node.value
+    for rv in toposort(x):
+      if align_latent(rv.name) is not None or align_data(rv.name) is not None:
         p_log_prob += tf.reduce_sum(rv.log_prob(rv.value))
     return p_log_prob
 
